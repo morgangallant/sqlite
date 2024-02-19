@@ -149,7 +149,11 @@ func openConn(path string, flags ...OpenFlags) (*Conn, error) {
 	runtime.SetFinalizer(conn, func(conn *Conn) {
 		if !conn.closed {
 			var buf [20]byte
-			panic(file + ":" + string(itoa(buf[:], int64(line))) + ": *sqlite.Conn for " + path + " garbage collected, call Close method")
+			panic(
+				file + ":" + string(
+					itoa(buf[:], int64(line)),
+				) + ": *sqlite.Conn for " + path + " garbage collected, call Close method",
+			)
 		}
 	})
 
@@ -169,7 +173,6 @@ func openConn(path string, flags ...OpenFlags) (*Conn, error) {
 			return nil, err
 		}
 	}
-
 
 	return conn, nil
 }
@@ -611,7 +614,7 @@ func (stmt *Stmt) ClearBindings() error {
 //
 // https://www.sqlite.org/c3ref/step.html
 //
-// Shared cache
+// # Shared cache
 //
 // As the sqlite package enables shared cache mode by default
 // and multiple writers are common in multi-threaded programs,
@@ -956,6 +959,21 @@ func (stmt *Stmt) ColumnBytes(col int, buf []byte) int {
 	return copy(buf, stmt.columnBytes(col))
 }
 
+// ColumnBytesNoCopy is similar to ColumnBytes, but returns
+// the underlying byte slice from SQLite w/o copying it.
+// It's only valid for the lifetime of the statement, use with caution.
+func (stmt *Stmt) ColumnBytesNoCopy(col int) []byte {
+	return stmt.columnBytes(col)
+}
+
+// ColumnBytesNoCopyAssumeLength is similar to `ColumnBytesNoCopy`, but
+// assumes the length of the slice (avoids an additional function call).
+// This should only be used in performance-critical code, as it's rather
+// unsafe and probably a bad idea.
+func (stmt *Stmt) ColumnBytesNoCopyAssumeLength(col, length int) []byte {
+	return stmt.columnBytesAssumeLength(col, length)
+}
+
 // ColumnReader creates a byte reader for a query result column.
 //
 // The reader directly references C-managed memory that stops
@@ -967,31 +985,34 @@ func (stmt *Stmt) ColumnReader(col int) *bytes.Reader {
 }
 
 func (stmt *Stmt) columnBytes(col int) []byte {
+	n := stmt.ColumnLen(col)
+	return columnBytesAssumeLength(col, n)
+}
+
+func (stmt *Stmt) columnBytesAssumeLength(col, length int) []byte {
 	p := C.sqlite3_column_blob(stmt.stmt, C.int(col))
 	if p == nil {
 		return nil
 	}
-	n := stmt.ColumnLen(col)
-
 	slice := struct {
 		data unsafe.Pointer
 		len  int
 		cap  int
 	}{
 		data: unsafe.Pointer(p),
-		len:  n,
-		cap:  n,
+		len:  length,
+		cap:  length,
 	}
 	return *(*[]byte)(unsafe.Pointer(&slice))
 }
 
 // ColumnType are codes for each of the SQLite fundamental datatypes:
 //
-//   64-bit signed integer
-//   64-bit IEEE floating point number
-//   string
-//   BLOB
-//   NULL
+//	64-bit signed integer
+//	64-bit IEEE floating point number
+//	string
+//	BLOB
+//	NULL
 //
 // https://www.sqlite.org/c3ref/c_blob.html
 type ColumnType int
@@ -1024,11 +1045,11 @@ func (t ColumnType) String() string {
 // ColumnType returns the datatype code for the initial data
 // type of the result column. The returned value is one of:
 //
-//   SQLITE_INTEGER
-//   SQLITE_FLOAT
-//   SQLITE_TEXT
-//   SQLITE_BLOB
-//   SQLITE_NULL
+//	SQLITE_INTEGER
+//	SQLITE_FLOAT
+//	SQLITE_TEXT
+//	SQLITE_BLOB
+//	SQLITE_NULL
 //
 // Column indices start at 0.
 //
@@ -1044,7 +1065,10 @@ func (stmt *Stmt) ColumnType(col int) ColumnType {
 // https://www.sqlite.org/c3ref/column_blob.html
 func (stmt *Stmt) ColumnText(col int) string {
 	n := stmt.ColumnLen(col)
-	return C.GoStringN((*C.char)(unsafe.Pointer(C.sqlite3_column_text(stmt.stmt, C.int(col)))), C.int(n))
+	return C.GoStringN(
+		(*C.char)(unsafe.Pointer(C.sqlite3_column_text(stmt.stmt, C.int(col)))),
+		C.int(n),
+	)
 }
 
 // ColumnFloat returns a query result as a float64.
@@ -1066,7 +1090,9 @@ func (stmt *Stmt) ColumnLen(col int) int {
 }
 
 func (stmt *Stmt) ColumnDatabaseName(col int) string {
-	return C.GoString((*C.char)(unsafe.Pointer(C.sqlite3_column_database_name(stmt.stmt, C.int(col)))))
+	return C.GoString(
+		(*C.char)(unsafe.Pointer(C.sqlite3_column_database_name(stmt.stmt, C.int(col)))),
+	)
 }
 
 func (stmt *Stmt) ColumnTableName(col int) string {
@@ -1110,6 +1136,16 @@ func (stmt *Stmt) GetBytes(colName string, buf []byte) int {
 		return 0
 	}
 	return stmt.ColumnBytes(col, buf)
+}
+
+// GetBytesNoCopy is similar to GetBytes, but doesn't copy.
+// See the comment on `ColumnBytesNoCopy` for more info.
+func (stmt *Stmt) GetBytesNoCopy(colName string) []byte {
+	col, found := stmt.colNames[colName]
+	if !found {
+		return 0
+	}
+	return stmt.ColumnBytesNoCopy(col)
 }
 
 // GetReader creates a byte reader for colName.
